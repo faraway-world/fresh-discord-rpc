@@ -10,7 +10,7 @@ Zero configuration. Zero external dependencies. Just clone and start editing.
 
 - ⚡ **Plug & Play**: Works immediately upon cloning. No virtual environments, no `pip install`, and no background service setup needed.
 - 🚀 **Zero External Dependencies**: The background micro-daemon is written entirely using the **Python standard library** (`socket`, `struct`, `json`).
-- 📁 **Active File & Workspace**: Displays current workspace folder and active file (e.g., `Coding src/main.rs [42/180]`).
+- 📁 **Active File & Workspace**: Displays current workspace folder directory and active file (e.g., `Editing main.rs [Line:42/Total:180]` | `Workspace: /home/user/project`).
 - 🎯 **Line & Status Tracking**: Live line number, total line count, and `*` indicator when files have unsaved changes.
 - 🎨 **Language Icons**: Detects file type and displays appropriate language badges (Rust, Python, TypeScript, Go, C++, etc.).
 - ⏱️ **Elapsed Session Timer**: Accurate live timer showing how long you've been working.
@@ -56,8 +56,7 @@ If you would like to customize your Discord presence, you can create `~/.config/
 ```json
 {
   "client_id": "YOUR_DISCORD_APPLICATION_ID",
-  "activity_prefix": "Coding",
-  "activity_type": "playing"
+  "activity_prefix": "Editing"
 }
 ```
 
@@ -65,8 +64,7 @@ If you would like to customize your Discord presence, you can create `~/.config/
 | Setting | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `client_id` | `string` | Built-in | Custom Discord Application ID from the Developer Portal. |
-| `activity_prefix` | `string` | `"Coding"` | Status prefix shown before the active file (e.g. `"Coding"`, `"Editing"`, `"Hacking on"`). |
-| `activity_type` | `string` | `"playing"` | Discord activity type: `"playing"`, `"watching"`, `"listening"`. |
+| `activity_prefix` | `string` | `"Editing"` | Status prefix shown before the active file (e.g. `"Editing"`, `"Coding"`, `"Hacking on"`). |
 
 ---
 

@@ -17,21 +17,32 @@ function getStateFilePath(): string {
 }
 
 function getDaemonPath(): string {
-  const pkgDaemon = editor.pathJoin(
-    editor.getConfigDir(),
-    "plugins",
-    "packages",
-    "fresh-discord-rpc",
-    "daemon.py"
-  );
-  if (editor.fileExists(pkgDaemon)) {
-    return pkgDaemon;
-  }
-  const scriptsDaemon = "/home/hikari/Scripts/fresh_rpc.py";
-  if (editor.fileExists(scriptsDaemon)) {
-    return scriptsDaemon;
-  }
-  return pkgDaemon;
+  // 1. Try plugin directory directly (works regardless of install location)
+  try {
+    const pluginDir = editor.getPluginDir();
+    if (pluginDir) {
+      const p = editor.pathJoin(pluginDir, "daemon.py");
+      if (editor.fileExists(p)) {
+        return p;
+      }
+    }
+  } catch (_) {}
+
+  // 2. Try standard packages directory
+  try {
+    const pkgDaemon = editor.pathJoin(
+      editor.getConfigDir(),
+      "plugins",
+      "packages",
+      "fresh-discord-rpc",
+      "daemon.py"
+    );
+    if (editor.fileExists(pkgDaemon)) {
+      return pkgDaemon;
+    }
+  } catch (_) {}
+
+  return "daemon.py";
 }
 
 function ensureDaemonRunning(): void {
@@ -62,7 +73,8 @@ function collectState(): Record<string, unknown> {
   let modified = false;
 
   if (bufferInfo && !bufferInfo.is_terminal) {
-    activeFile = bufferInfo.name || (bufferInfo.path ? bufferInfo.path.split("/").pop() || "" : "");
+    const rawName = bufferInfo.name || (bufferInfo.path ? bufferInfo.path.split("/").pop() || "" : "");
+    activeFile = rawName.includes("/") ? rawName.split("/").pop() || rawName : rawName;
     filePath = bufferInfo.path || "";
     language = bufferInfo.language || "";
     lineCount = bufferInfo.line_count ?? null;

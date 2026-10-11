@@ -239,7 +239,7 @@ class DiscordBridgeDaemon:
         self.state_file = state_file
         self.config = load_user_config()
         self.client_id = os.environ.get("FRESH_DISCORD_CLIENT_ID") or self.config.get("client_id") or DEFAULT_CLIENT_ID
-        self.activity_prefix = self.config.get("activity_prefix", "Coding")
+        self.activity_prefix = self.config.get("activity_prefix", "Editing")
         
         self.client = DiscordIPCClient(self.client_id)
         self.running = True
@@ -259,7 +259,7 @@ class DiscordBridgeDaemon:
         """Periodically reload config to detect Client ID or setting changes."""
         self.config = load_user_config()
         new_client_id = os.environ.get("FRESH_DISCORD_CLIENT_ID") or self.config.get("client_id") or DEFAULT_CLIENT_ID
-        self.activity_prefix = self.config.get("activity_prefix", "Coding")
+        self.activity_prefix = self.config.get("activity_prefix", "Editing")
         
         if new_client_id != self.client_id:
             print(f"[Fresh Discord RPC] Client ID updated to {new_client_id}, reconnecting...")
@@ -303,6 +303,8 @@ class DiscordBridgeDaemon:
 
         active_file = state.get("active_file", "")
         workspace = state.get("workspace", "")
+        cwd = state.get("cwd", "")
+        folder_dir = cwd or workspace
         language = state.get("language", "").lower()
         line = state.get("cursor_line")
         line_count = state.get("line_count")
@@ -319,19 +321,19 @@ class DiscordBridgeDaemon:
         if active_file:
             line_str = ""
             if line is not None and line_count is not None and line_count > 0:
-                line_str = f" [{line}/{line_count}]"
+                line_str = f" [Line:{line}/Total:{line_count}]"
             elif line is not None:
-                line_str = f" [Line {line}]"
+                line_str = f" [Line:{line}]"
                 
             mod_flag = " *" if modified else ""
             details = f"{self.activity_prefix} {active_file}{mod_flag}{line_str}"
-            state_text = f"Workspace: {workspace}" if workspace else "In Fresh Editor"
+            state_text = f"Workspace: {folder_dir}" if folder_dir else "In Fresh Editor"
             large_text = f"Fresh Editor - {lang_display}"
             small_image = "edit"
             small_text = f"{self.activity_prefix} {active_file}"
         else:
             details = "Idling in Fresh"
-            state_text = f"Workspace: {workspace}" if workspace else "Fresh Editor"
+            state_text = f"Workspace: {folder_dir}" if folder_dir else "Fresh Editor"
             large_text = "Fresh Editor"
             small_image = None
             small_text = None
@@ -348,7 +350,7 @@ class DiscordBridgeDaemon:
                 "start": int(session_start)
             },
             "buttons": [
-                {"label": "Fresh Editor", "url": "https://getfresh.dev"}
+                {"label": "Fresh Editor", "url": "https://github.com/sinelaw/fresh"}
             ]
         }
         if small_image:
