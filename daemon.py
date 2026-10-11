@@ -13,8 +13,12 @@ import uuid
 import struct
 import socket
 import signal
+import functools
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
+
+# Ensure all prints are unbuffered
+print = functools.partial(print, flush=True)
 
 # Default Discord Application ID
 # To show "Fresh Editor" in Discord, register a free application at
