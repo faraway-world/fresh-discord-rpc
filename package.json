@@ -1,0 +1,11 @@
+{
+  "name": "fresh-discord-rpc",
+  "version": "1.0.0",
+  "description": "Discord Rich Presence integration for Fresh editor",
+  "type": "plugin",
+  "author": "hikari",
+  "license": "MIT",
+  "fresh": {
+    "entry": "plugin.ts"
+  }
+}
