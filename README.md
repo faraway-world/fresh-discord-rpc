@@ -26,7 +26,7 @@ Zero configuration. Zero external dependencies. Just clone and start editing.
 To install, simply clone this repository into your Fresh plugins package directory:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/fresh-discord-rpc.git ~/.config/fresh/plugins/packages/fresh-discord-rpc
+git clone https://github.com/faraway-world/fresh-discord-rpc.git ~/.config/fresh/plugins/packages/fresh-discord-rpc
 ```
 
 That's it! Launch Fresh and your Discord Rich Presence will automatically activate:
