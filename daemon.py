@@ -272,10 +272,21 @@ class DiscordBridgeDaemon:
         """Check if any fresh process is running."""
         try:
             import subprocess
-            out = subprocess.check_output(["pgrep", "-x", "fresh"], stderr=subprocess.DEVNULL)
-            return bool(out.strip())
+            if sys.platform == "win32":
+                out = subprocess.check_output(
+                    ["tasklist", "/FI", "IMAGENAME eq fresh.exe", "/NH"],
+                    stderr=subprocess.DEVNULL
+                ).decode("utf-8", errors="ignore")
+                return "fresh.exe" in out.lower()
+            else:
+                res = subprocess.run(
+                    ["pgrep", "-x", "fresh"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+                return res.returncode == 0 and bool(res.stdout.strip())
         except Exception:
-            return True
+            return False
 
     def read_state(self) -> Optional[Dict[str, Any]]:
         """Read state file written by Fresh plugin."""
@@ -298,8 +309,8 @@ class DiscordBridgeDaemon:
         updated_at = state.get("updated_at", 0)
         now = time.time()
         
-        # Consider stale if state was not updated in 2 minutes (120s)
-        if now - updated_at > 120.0:
+        # Consider stale if state was not updated in 20 seconds
+        if now - updated_at > 20.0:
             return None
 
         active_file = state.get("active_file", "")
@@ -399,9 +410,20 @@ class DiscordBridgeDaemon:
         
         reconnect_cooldown = 0.0
         config_check_time = 0.0
+        fresh_offline_time: Optional[float] = None
 
         while self.running:
             now = time.time()
+
+            # If Fresh has exited, track offline duration and shut down after 30s of inactivity
+            if not self.is_fresh_running():
+                if fresh_offline_time is None:
+                    fresh_offline_time = now
+                elif now - fresh_offline_time > 30.0:
+                    print("[Fresh Discord RPC] Fresh editor is not running. Daemon exiting cleanly.")
+                    self.running = False
+            else:
+                fresh_offline_time = None
 
             if now - config_check_time > 5.0:
                 self.reload_config()
