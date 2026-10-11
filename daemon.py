@@ -23,7 +23,7 @@ print = functools.partial(print, flush=True)
 # Default Discord Application ID
 # To show "Fresh Editor" in Discord, register a free application at
 # https://discord.com/developers/applications and paste its Application ID here.
-DEFAULT_CLIENT_ID = "793271441293967371"
+DEFAULT_CLIENT_ID = "1558908691967778856"
 
 # Opcodes for Discord IPC
 OP_HANDSHAKE = 0
