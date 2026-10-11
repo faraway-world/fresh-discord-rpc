@@ -291,14 +291,14 @@ class DiscordBridgeDaemon:
         if not state.get("enabled", True):
             return None
 
+        if not self.is_fresh_running():
+            return None
+
         updated_at = state.get("updated_at", 0)
         now = time.time()
         
-        # Consider stale if not updated in 20 seconds
-        if now - updated_at > 20.0:
-            return None
-            
-        if not self.is_fresh_running():
+        # Consider stale if state was not updated in 2 minutes (120s)
+        if now - updated_at > 120.0:
             return None
 
         active_file = state.get("active_file", "")

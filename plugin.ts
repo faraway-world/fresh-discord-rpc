@@ -103,17 +103,21 @@ function collectState(): Record<string, unknown> {
   };
 }
 
+let lastFlushTime = 0;
+
 function flushState(force = false): void {
   try {
     const state = collectState();
     const serialized = JSON.stringify(state, null, 2);
+    const now = Math.floor(Date.now() / 1000);
     
-    // Check if relevant fields changed or if forced
+    // Check if relevant fields changed or if forced or periodic heartbeat
     const compareObj = { ...state, updated_at: 0 };
     const compareStr = JSON.stringify(compareObj);
     
-    if (force || compareStr !== lastSerialized || isDirty) {
+    if (force || compareStr !== lastSerialized || isDirty || (now - lastFlushTime >= 5)) {
       lastSerialized = compareStr;
+      lastFlushTime = now;
       isDirty = false;
       const targetPath = getStateFilePath();
       editor.writeFile(targetPath, serialized);
@@ -135,8 +139,8 @@ function onCursorMove(): void {
 registerHandler("discord_rpc_on_cursor", onCursorMove);
 
 function onHeartbeat(): void {
-  // Update heartbeat timestamp & flush debounced cursor edits
-  flushState(isDirty);
+  // Refresh heartbeat timestamp & flush debounced cursor edits
+  flushState(false);
 }
 registerHandler("discord_rpc_heartbeat", onHeartbeat);
 
