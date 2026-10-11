@@ -24,6 +24,7 @@ print = functools.partial(print, flush=True)
 # To show "Fresh Editor" in Discord, register a free application at
 # https://discord.com/developers/applications and paste its Application ID here.
 DEFAULT_CLIENT_ID = "1558908691967778856"
+DEFAULT_LOGO_URL = "https://raw.githubusercontent.com/faraway-world/fresh-discord-rpc/main/assets/fresh-editor.png"
 
 # Opcodes for Discord IPC
 OP_HANDSHAKE = 0
@@ -315,7 +316,8 @@ class DiscordBridgeDaemon:
         if active_file and "." in active_file:
             ext = active_file.rsplit(".", 1)[-1].lower()
 
-        icon = LANGUAGE_ASSETS.get(language) or LANGUAGE_ASSETS.get(ext) or "code"
+        custom_logo = self.config.get("large_image")
+        icon = custom_logo or DEFAULT_LOGO_URL
         lang_display = language.capitalize() if language else (ext.upper() if ext else "Code")
 
         if active_file:
@@ -329,14 +331,13 @@ class DiscordBridgeDaemon:
             details = f"{self.activity_prefix} {active_file}{mod_flag}{line_str}"
             state_text = f"Workspace: {folder_dir}" if folder_dir else "In Fresh Editor"
             large_text = f"Fresh Editor - {lang_display}"
-            small_image = "edit"
-            small_text = f"{self.activity_prefix} {active_file}"
         else:
             details = "Idling in Fresh"
             state_text = f"Workspace: {folder_dir}" if folder_dir else "Fresh Editor"
             large_text = "Fresh Editor"
-            small_image = None
-            small_text = None
+
+        small_image = None
+        small_text = None
 
         activity: Dict[str, Any] = {
             "type": 0,  # Playing
