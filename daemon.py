@@ -85,14 +85,35 @@ def get_state_file_path() -> Path:
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.exists(xdg_runtime):
         return Path(xdg_runtime) / "fresh-discord-rpc.json"
-    return Path(f"/tmp/fresh-discord-rpc-{os.getuid()}.json")
+    tmp = os.environ.get("TMPDIR") or "/tmp"
+    return Path(tmp) / "fresh-discord-rpc.json"
 
 def get_lock_file_path() -> Path:
     """Determine lock file location to ensure a single running daemon."""
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.exists(xdg_runtime):
         return Path(xdg_runtime) / "fresh-discord-rpc.lock"
-    return Path(f"/tmp/fresh-discord-rpc-{os.getuid()}.lock")
+    tmp = os.environ.get("TMPDIR") or "/tmp"
+    return Path(tmp) / "fresh-discord-rpc.lock"
+
+def get_log_file_path() -> Path:
+    """Determine log file location."""
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime and os.path.exists(xdg_runtime):
+        return Path(xdg_runtime) / "fresh-discord-rpc.log"
+    tmp = os.environ.get("TMPDIR") or "/tmp"
+    return Path(tmp) / "fresh-discord-rpc.log"
+
+def log(msg: str):
+    """Write timestamped log message to stdout and log file."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    formatted = f"[{timestamp}] [Fresh Discord RPC] {msg}"
+    print(formatted, flush=True)
+    try:
+        with open(get_log_file_path(), "a", encoding="utf-8") as f:
+            f.write(formatted + "\n")
+    except Exception:
+        pass
 
 def load_user_config() -> Dict[str, Any]:
     """Read user configuration file if present."""
@@ -116,7 +137,7 @@ def acquire_single_instance_lock():
         lock_fd.flush()
         return lock_fd
     except (IOError, OSError, ImportError):
-        print(f"[Fresh Discord RPC] Another instance is already running (locked {lock_file}). Exiting.")
+        log(f"Another instance is already running (locked {lock_file}). Exiting.")
         sys.exit(0)
 
 def find_discord_ipc_socket() -> Optional[str]:
@@ -133,12 +154,15 @@ def find_discord_ipc_socket() -> Optional[str]:
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         candidates.extend([os.path.join(xdg, f"discord-ipc-{i}") for i in range(10)])
+        candidates.extend([os.path.join(xdg, "app", "com.discordapp.Discord", f"discord-ipc-{i}") for i in range(10)])
+        candidates.extend([os.path.join(xdg, "snap.discord", f"discord-ipc-{i}") for i in range(10)])
     
     tmp = os.environ.get("TMPDIR") or "/tmp"
     candidates.extend([os.path.join(tmp, f"discord-ipc-{i}") for i in range(10)])
     
     uid = os.getuid()
     candidates.extend([f"/run/user/{uid}/discord-ipc-{i}" for i in range(10)])
+    candidates.extend([f"/run/user/{uid}/app/com.discordapp.Discord/discord-ipc-{i}" for i in range(10)])
 
     for path in candidates:
         if os.path.exists(path):
@@ -185,9 +209,12 @@ class DiscordIPCClient:
         if not self.sock:
             return None, None
         try:
-            hdr = self.sock.recv(8)
-            if not hdr or len(hdr) < 8:
-                return None, None
+            hdr = bytearray()
+            while len(hdr) < 8:
+                chunk = self.sock.recv(8 - len(hdr))
+                if not chunk:
+                    return None, None
+                hdr.extend(chunk)
             op, length = struct.unpack("<II", hdr)
             buf = bytearray()
             while len(buf) < length:
@@ -253,7 +280,7 @@ class DiscordBridgeDaemon:
         signal.signal(signal.SIGINT, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
-        print(f"\n[Fresh Discord RPC] Received signal {signum}, stopping daemon...")
+        log(f"Received signal {signum}, stopping daemon...")
         self.running = False
 
     def reload_config(self):
@@ -263,7 +290,7 @@ class DiscordBridgeDaemon:
         self.activity_prefix = self.config.get("activity_prefix", "Editing")
         
         if new_client_id != self.client_id:
-            print(f"[Fresh Discord RPC] Client ID updated to {new_client_id}, reconnecting...")
+            log(f"Client ID updated to {new_client_id}, reconnecting...")
             self.client.close()
             self.client_id = new_client_id
             self.client = DiscordIPCClient(self.client_id)
@@ -271,6 +298,15 @@ class DiscordBridgeDaemon:
     def is_fresh_running(self) -> bool:
         """Check if any fresh process is running."""
         try:
+            ppid = os.getppid()
+            if ppid > 1:
+                try:
+                    comm_file = Path(f"/proc/{ppid}/comm")
+                    if comm_file.exists() and "fresh" in comm_file.read_text().strip().lower():
+                        return True
+                except Exception:
+                    pass
+
             import subprocess
             if sys.platform == "win32":
                 out = subprocess.check_output(
@@ -309,8 +345,8 @@ class DiscordBridgeDaemon:
         updated_at = state.get("updated_at", 0)
         now = time.time()
         
-        # Consider stale if state was not updated in 20 seconds
-        if now - updated_at > 20.0:
+        # Consider stale if state was not updated in 300 seconds
+        if now - updated_at > 300.0:
             return None
 
         active_file = state.get("active_file", "")
@@ -323,6 +359,17 @@ class DiscordBridgeDaemon:
         modified = state.get("modified", False)
         session_start = state.get("session_start", int(now))
 
+        state_prefix = state.get("activity_prefix")
+        active_prefix = state_prefix or self.activity_prefix
+
+        state_client_id = state.get("client_id")
+        target_client_id = state_client_id or os.environ.get("FRESH_DISCORD_CLIENT_ID") or self.config.get("client_id") or DEFAULT_CLIENT_ID
+        if target_client_id != self.client_id:
+            log(f"Client ID switched to {target_client_id}, reconnecting...")
+            self.client.close()
+            self.client_id = target_client_id
+            self.client = DiscordIPCClient(self.client_id)
+
         ext = ""
         if active_file and "." in active_file:
             ext = active_file.rsplit(".", 1)[-1].lower()
@@ -331,7 +378,7 @@ class DiscordBridgeDaemon:
         icon = custom_logo or DEFAULT_LOGO_URL
         lang_display = language.capitalize() if language else (ext.upper() if ext else "Code")
 
-        if active_file:
+        if active_file and active_file != "[No Name]":
             line_str = ""
             if line is not None and line_count is not None and line_count > 0:
                 line_str = f" [Line:{line}/Total:{line_count}]"
@@ -339,7 +386,7 @@ class DiscordBridgeDaemon:
                 line_str = f" [Line:{line}]"
                 
             mod_flag = " *" if modified else ""
-            details = f"{self.activity_prefix} {active_file}{mod_flag}{line_str}"
+            details = f"{active_prefix} {active_file}{mod_flag}{line_str}"
             state_text = f"Workspace: {folder_dir}" if folder_dir else "In Fresh Editor"
             large_text = f"Fresh Editor - {lang_display}"
         else:
@@ -381,10 +428,11 @@ class DiscordBridgeDaemon:
                 self.activity_cleared = True
                 self.last_payload = None
                 self.pending_payload = None
-                print("[Fresh Discord RPC] Activity cleared.")
+                log("Activity cleared.")
             return
 
         if self.last_payload == activity:
+            self.pending_payload = None
             return
 
         # Discord rate-limit: 15 seconds
@@ -398,15 +446,15 @@ class DiscordBridgeDaemon:
             self.last_payload = activity
             self.pending_payload = None
             self.activity_cleared = False
-            print(f"[Fresh Discord RPC] Updated: {activity.get('details')} | {activity.get('state')}")
+            log(f"Updated: {activity.get('details')} | {activity.get('state')}")
         else:
-            print("[Fresh Discord RPC] Failed to send activity. Will reconnect...")
+            log("Failed to send activity. Will reconnect...")
             self.client.close()
 
     def run(self):
         """Main loop."""
-        print(f"[Fresh Discord RPC] Micro-daemon started (PID {os.getpid()}).")
-        print(f"[Fresh Discord RPC] Watching: {self.state_file}")
+        log(f"Micro-daemon started (PID {os.getpid()}).")
+        log(f"Watching: {self.state_file}")
         
         reconnect_cooldown = 0.0
         config_check_time = 0.0
@@ -420,7 +468,7 @@ class DiscordBridgeDaemon:
                 if fresh_offline_time is None:
                     fresh_offline_time = now
                 elif now - fresh_offline_time > 30.0:
-                    print("[Fresh Discord RPC] Fresh editor is not running. Daemon exiting cleanly.")
+                    log("Fresh editor is not running. Daemon exiting cleanly.")
                     self.running = False
             else:
                 fresh_offline_time = None
@@ -432,7 +480,7 @@ class DiscordBridgeDaemon:
             if not self.client.connected:
                 if now >= reconnect_cooldown:
                     if self.client.connect():
-                        print(f"[Fresh Discord RPC] Connected to Discord IPC (Client ID: {self.client_id}).")
+                        log(f"Connected to Discord IPC (Client ID: {self.client_id}).")
                         reconnect_cooldown = 0.0
                     else:
                         reconnect_cooldown = now + 5.0
@@ -441,9 +489,13 @@ class DiscordBridgeDaemon:
                 state = self.read_state()
                 activity = self.build_activity(state) if state else None
 
-                if self.pending_payload and (now - self.last_update_time >= 15.0):
-                    to_send = activity if activity else self.pending_payload
-                    self.update(to_send)
+                if activity is None:
+                    # RPC disabled or stale: clear any pending update and send None
+                    self.pending_payload = None
+                    self.update(None)
+                elif self.pending_payload and (now - self.last_update_time >= 15.0):
+                    # Rate-limit window passed: send the latest activity
+                    self.update(activity)
                 else:
                     self.update(activity)
 
@@ -453,7 +505,7 @@ class DiscordBridgeDaemon:
         if self.client.connected:
             self.client.send_activity(None)
             self.client.close()
-        print("[Fresh Discord RPC] Micro-daemon stopped cleanly.")
+        log("Micro-daemon stopped cleanly.")
 
 def main():
     _lock = acquire_single_instance_lock()

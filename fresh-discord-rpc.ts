@@ -3,6 +3,29 @@
 
 const editor = getEditor();
 
+// Declare configuration options for the Fresh Settings UI
+// Note: Fresh renders settings alphabetically by key name.
+// Keys are chosen so 'enabled' sorts first.
+editor.defineConfigBoolean("enabled", {
+  default: true,
+  description: "Enable or disable Discord Rich Presence.",
+});
+
+editor.defineConfigString("presencePrefix", {
+  default: "Editing",
+  description: "Prefix verb displayed before the active filename (e.g. 'Editing', 'Working on').",
+});
+
+editor.defineConfigBoolean("showCursorPosition", {
+  default: true,
+  description: "Display cursor line number and total lines in Discord activity.",
+});
+
+editor.defineConfigBoolean("showWorkspace", {
+  default: true,
+  description: "Display current workspace/project folder name in Discord activity.",
+});
+
 const sessionStart = Math.floor(Date.now() / 1000);
 let rpcEnabled = true;
 let isDirty = false;
@@ -13,7 +36,8 @@ function getStateFilePath(): string {
   if (xdg) {
     return editor.pathJoin(xdg, "fresh-discord-rpc.json");
   }
-  return "/tmp/fresh-discord-rpc.json";
+  const tmp = editor.getEnv("TMPDIR") || "/tmp";
+  return editor.pathJoin(tmp, "fresh-discord-rpc.json");
 }
 
 function getDaemonPath(): string {
@@ -57,13 +81,20 @@ function ensureDaemonRunning(): void {
 }
 
 function collectState(): Record<string, unknown> {
+  const config = (editor.getPluginConfig() as Record<string, any>) || {};
+  const isEnabled = typeof config.enabled === "boolean" ? config.enabled : rpcEnabled;
+  const showWs = config.showWorkspace !== false;
+  const showCursor = config.showCursorPosition !== false;
+  const prefix = config.presencePrefix || "Editing";
+  const customClientId = "";
+
   const activeId = editor.getActiveBufferId();
   const bufferInfo = activeId > 0 ? editor.getBufferInfo(activeId) : null;
   const cursor = editor.getPrimaryCursor();
   const cwd = editor.getCwd() || "";
   
   const pathParts = cwd.split("/").filter(Boolean);
-  const workspace = pathParts.length > 0 ? pathParts[pathParts.length - 1] : "Workspace";
+  const workspace = showWs ? (pathParts.length > 0 ? pathParts[pathParts.length - 1] : "Workspace") : "";
 
   let activeFile = "";
   let filePath = "";
@@ -77,9 +108,9 @@ function collectState(): Record<string, unknown> {
     activeFile = rawName.includes("/") ? rawName.split("/").pop() || rawName : rawName;
     filePath = bufferInfo.path || "";
     language = bufferInfo.language || "";
-    lineCount = bufferInfo.line_count ?? null;
+    lineCount = showCursor ? (bufferInfo.line_count ?? null) : null;
     modified = bufferInfo.modified;
-    if (cursor && cursor.line !== null) {
+    if (showCursor && cursor && cursor.line !== null && cursor.line !== undefined) {
       cursorLine = cursor.line + 1; // 1-indexed for display
     }
   }
@@ -88,8 +119,8 @@ function collectState(): Record<string, unknown> {
   const openBuffersCount = buffers.filter((b) => !b.is_terminal && !b.is_virtual).length;
 
   return {
-    enabled: rpcEnabled,
-    cwd,
+    enabled: isEnabled,
+    cwd: showWs ? cwd : "",
     workspace,
     active_file: activeFile,
     file_path: filePath,
@@ -98,9 +129,29 @@ function collectState(): Record<string, unknown> {
     line_count: lineCount,
     modified,
     open_buffers_count: openBuffersCount,
+    activity_prefix: prefix,
+    client_id: customClientId,
     session_start: sessionStart,
     updated_at: Math.floor(Date.now() / 1000)
   };
+}
+
+function writeStateFile(filePath: string, content: string): boolean {
+  try {
+    if (typeof editor.replaceFile === "function") {
+      const p = typeof editor.localPath === "function" ? editor.localPath(filePath) : filePath;
+      if (editor.replaceFile(p, content)) {
+        return true;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const p = typeof editor.localPath === "function" ? editor.localPath(filePath) : filePath;
+    return editor.writeFile(p, content);
+  } catch (_) {}
+
+  return false;
 }
 
 let lastFlushTime = 0;
@@ -120,7 +171,7 @@ function flushState(force = false): void {
       lastFlushTime = now;
       isDirty = false;
       const targetPath = getStateFilePath();
-      editor.writeFile(targetPath, serialized);
+      writeStateFile(targetPath, serialized);
     }
   } catch (err: any) {
     editor.debug("Fresh Discord RPC: State flush error: " + (err?.message || err));
@@ -146,10 +197,22 @@ registerHandler("discord_rpc_heartbeat", onHeartbeat);
 
 function onToggleRpc(): void {
   rpcEnabled = !rpcEnabled;
+  try {
+    editor.setSetting("plugins.fresh-discord-rpc.settings.enabled", rpcEnabled);
+  } catch (_) {}
   flushState(true);
   editor.setStatus("Discord RPC: " + (rpcEnabled ? "Enabled" : "Disabled"));
 }
 registerHandler("discord_rpc_toggle", onToggleRpc);
+
+function onConfigChange(): void {
+  const config = (editor.getPluginConfig() as Record<string, any>) || {};
+  if (typeof config.enabled === "boolean") {
+    rpcEnabled = config.enabled;
+  }
+  flushState(true);
+}
+registerHandler("discord_rpc_on_config_change", onConfigChange);
 
 function onStatusRpc(): void {
   const state = collectState();
@@ -161,6 +224,7 @@ registerHandler("discord_rpc_status", onStatusRpc);
 
 // Hook events
 editor.on("ready", "discord_rpc_on_change");
+editor.on("config_changed", "discord_rpc_on_config_change");
 editor.on("buffer_activated", "discord_rpc_on_change");
 editor.on("buffer_deactivated", "discord_rpc_on_change");
 editor.on("buffer_closed", "discord_rpc_on_change");

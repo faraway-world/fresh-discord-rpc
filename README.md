@@ -45,8 +45,9 @@ Fresh executes plugins within an isolated **QuickJS (ES2020)** engine. Because e
 ┌────────────────────────────────────────────────────────┐
 │                   Fresh Text Editor                    │
 │                                                        │
-│  plugin.ts (QuickJS)                                   │
+│  fresh-discord-rpc.ts (QuickJS)                        │
 │  ├─ Hooks: buffer_activated, cursor_moved, save, etc.  │
+│  ├─ Settings: defineConfig UI integration              │
 │  └─ Writes state atomically to runtime JSON file       │
 └──────────────────────────┬─────────────────────────────┘
                            │ Atomic JSON Flush
@@ -60,7 +61,7 @@ Fresh executes plugins within an isolated **QuickJS (ES2020)** engine. Because e
 │           daemon.py (Pure Python 3 Stdlib)             │
 │                                                        │
 │  ├─ Single-instance mutual exclusion lock (flock)      │
-│  ├─ Parent process monitoring (pgrep lifecycle check)  │
+│  ├─ Parent process monitoring (PID / comm check)       │
 │  └─ Length-prefixed binary frames (Opcode 0 / Opcode 1)│
 └──────────────────────────┬─────────────────────────────┘
                            │ Unix Domain Socket / Named Pipe
@@ -71,14 +72,27 @@ Fresh executes plugins within an isolated **QuickJS (ES2020)** engine. Because e
 └────────────────────────────────────────────────────────┘
 ```
 
-1. **Plugin Core (`plugin.ts`)**: Subscribes to editor lifecycle and buffer events, debounces rapid cursor changes, and periodically writes atomic editor state to `$XDG_RUNTIME_DIR/fresh-discord-rpc.json`.
+1. **Plugin Core (`fresh-discord-rpc.ts`)**: Subscribes to editor lifecycle and buffer events, manages user preferences via Fresh's native settings framework, debounces rapid cursor changes, and periodically writes atomic editor state to `$XDG_RUNTIME_DIR/fresh-discord-rpc.json`.
 2. **Micro-Daemon (`daemon.py`)**: A single-instance background worker spawned automatically by the plugin. It establishes an `AF_UNIX` (or Windows Named Pipe) stream to Discord, formats activity payloads, handles connection recovery, and ensures immediate presence teardown upon editor exit.
 
 ---
 
 ## Installation
 
-Clone this repository directly into your Fresh packages directory:
+### Method 1: Fresh Package Manager (Recommended)
+
+Install directly from inside Fresh using the Command Palette:
+
+1. Press `Ctrl+P` (or your mapped Command Palette shortcut).
+2. Execute **`Package: Install from URL`**.
+3. Enter repository URL:
+   ```text
+   https://github.com/faraway-world/fresh-discord-rpc
+   ```
+
+### Method 2: Git Clone (Manual)
+
+Clone this repository into your Fresh packages directory:
 
 ```bash
 git clone https://github.com/faraway-world/fresh-discord-rpc.git ~/.config/fresh/plugins/packages/fresh-discord-rpc
@@ -90,6 +104,37 @@ Open any file with Fresh:
 fresh path/to/file.ext
 ```
 Rich Presence will initialize automatically, and your Discord activity will display **Playing Fresh Editor**.
+
+---
+
+## Editor Settings & Configuration
+
+`fresh-discord-rpc` is integrated directly into Fresh Editor's native graphical Settings UI (`Ctrl+P` &rarr; `Open Settings` &rarr; **Plugins** &rarr; **fresh-discord-rpc**):
+
+| Setting | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enabled` | `boolean` | `true` | Toggle Discord Rich Presence broadcast on or off. |
+| `presencePrefix` | `string` | `"Editing"` | Verb prefix displayed before active filename (e.g., `Editing`, `Viewing`, `Working on`). |
+| `showCursorPosition` | `boolean` | `true` | Display active line number and total buffer line count. |
+| `showWorkspace` | `boolean` | `true` | Display active workspace or project folder name. |
+
+Settings can also be configured programmatically in `~/.config/fresh/config.json`:
+
+```json
+{
+  "plugins": {
+    "fresh-discord-rpc": {
+      "enabled": true,
+      "settings": {
+        "enabled": true,
+        "presencePrefix": "Editing",
+        "showCursorPosition": true,
+        "showWorkspace": true
+      }
+    }
+  }
+}
+```
 
 ---
 

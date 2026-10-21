@@ -1,7 +1,8 @@
 {
+  "$schema": "https://raw.githubusercontent.com/sinelaw/fresh/main/crates/fresh-editor/plugins/schemas/package.schema.json",
   "name": "fresh-discord-rpc",
   "version": "1.0.0",
-  "description": "Discord Rich Presence integration for Fresh editor",
+  "description": "Zero-configuration Discord Rich Presence integration for Fresh editor",
   "type": "plugin",
   "author": "faraway-world",
   "license": "MIT",
@@ -9,7 +10,14 @@
     "type": "git",
     "url": "https://github.com/faraway-world/fresh-discord-rpc.git"
   },
+  "keywords": [
+    "discord",
+    "rpc",
+    "rich-presence",
+    "presence",
+    "status"
+  ],
   "fresh": {
-    "entry": "plugin.ts"
+    "entry": "fresh-discord-rpc.ts"
   }
 }
