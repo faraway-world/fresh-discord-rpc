@@ -14,6 +14,7 @@ import struct
 import socket
 import signal
 import functools
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
@@ -85,24 +86,21 @@ def get_state_file_path() -> Path:
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.exists(xdg_runtime):
         return Path(xdg_runtime) / "fresh-discord-rpc.json"
-    tmp = os.environ.get("TMPDIR") or "/tmp"
-    return Path(tmp) / "fresh-discord-rpc.json"
+    return Path(tempfile.gettempdir()) / "fresh-discord-rpc.json"
 
 def get_lock_file_path() -> Path:
     """Determine lock file location to ensure a single running daemon."""
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.exists(xdg_runtime):
         return Path(xdg_runtime) / "fresh-discord-rpc.lock"
-    tmp = os.environ.get("TMPDIR") or "/tmp"
-    return Path(tmp) / "fresh-discord-rpc.lock"
+    return Path(tempfile.gettempdir()) / "fresh-discord-rpc.lock"
 
 def get_log_file_path() -> Path:
     """Determine log file location."""
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime and os.path.exists(xdg_runtime):
         return Path(xdg_runtime) / "fresh-discord-rpc.log"
-    tmp = os.environ.get("TMPDIR") or "/tmp"
-    return Path(tmp) / "fresh-discord-rpc.log"
+    return Path(tempfile.gettempdir()) / "fresh-discord-rpc.log"
 
 def log(msg: str):
     """Write timestamped log message to stdout and log file."""
@@ -116,40 +114,60 @@ def log(msg: str):
         pass
 
 def load_user_config() -> Dict[str, Any]:
-    """Read user configuration file if present."""
-    config_path = Path.home() / ".config" / "fresh" / "discord_rpc.json"
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    """Read user configuration file if present across Linux, macOS, and Windows."""
+    candidates = [
+        Path.home() / ".config" / "fresh" / "discord_rpc.json",
+    ]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "fresh" / "discord_rpc.json")
+
+    for config_path in candidates:
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
     return {}
 
 def acquire_single_instance_lock():
-    """Ensure only one instance of the daemon runs."""
+    """Ensure only one instance of the daemon runs across platforms."""
     lock_file = get_lock_file_path()
     try:
-        import fcntl
-        lock_fd = open(lock_file, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lock_fd.write(f"{os.getpid()}\n")
-        lock_fd.flush()
-        return lock_fd
-    except (IOError, OSError, ImportError):
+        if sys.platform == "win32":
+            import msvcrt
+            lock_fd = open(lock_file, "a+", encoding="utf-8")
+            lock_fd.seek(0)
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            except (IOError, OSError):
+                log(f"Another instance is already running (locked {lock_file}). Exiting.")
+                sys.exit(0)
+            lock_fd.truncate(0)
+            lock_fd.write(f"{os.getpid()}\n")
+            lock_fd.flush()
+            return lock_fd
+        else:
+            import fcntl
+            lock_fd = open(lock_file, "w", encoding="utf-8")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                log(f"Another instance is already running (locked {lock_file}). Exiting.")
+                sys.exit(0)
+            lock_fd.write(f"{os.getpid()}\n")
+            lock_fd.flush()
+            return lock_fd
+    except (IOError, OSError):
         log(f"Another instance is already running (locked {lock_file}). Exiting.")
         sys.exit(0)
-
-def find_discord_ipc_socket() -> Optional[str]:
-    """Locate Discord IPC socket across Linux, macOS, and Windows."""
-    if sys.platform == "win32":
-        for i in range(10):
-            pipe_path = rf"\\.\pipe\discord-ipc-{i}"
-            if os.path.exists(pipe_path):
-                return pipe_path
+    except Exception as e:
+        log(f"Lock notice ({e}). Continuing...")
         return None
 
-    # Unix search paths
+def find_discord_ipc_socket() -> Optional[str]:
+    """Locate Discord IPC socket on Unix platforms."""
     candidates = []
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
@@ -157,12 +175,13 @@ def find_discord_ipc_socket() -> Optional[str]:
         candidates.extend([os.path.join(xdg, "app", "com.discordapp.Discord", f"discord-ipc-{i}") for i in range(10)])
         candidates.extend([os.path.join(xdg, "snap.discord", f"discord-ipc-{i}") for i in range(10)])
     
-    tmp = os.environ.get("TMPDIR") or "/tmp"
+    tmp = os.environ.get("TMPDIR") or tempfile.gettempdir()
     candidates.extend([os.path.join(tmp, f"discord-ipc-{i}") for i in range(10)])
     
-    uid = os.getuid()
-    candidates.extend([f"/run/user/{uid}/discord-ipc-{i}" for i in range(10)])
-    candidates.extend([f"/run/user/{uid}/app/com.discordapp.Discord/discord-ipc-{i}" for i in range(10)])
+    if hasattr(os, "getuid"):
+        uid = os.getuid()
+        candidates.extend([f"/run/user/{uid}/discord-ipc-{i}" for i in range(10)])
+        candidates.extend([f"/run/user/{uid}/app/com.discordapp.Discord/discord-ipc-{i}" for i in range(10)])
 
     for path in candidates:
         if os.path.exists(path):
@@ -170,58 +189,85 @@ def find_discord_ipc_socket() -> Optional[str]:
     return None
 
 class DiscordIPCClient:
-    """Pure-Python standard library Discord IPC client."""
+    """Pure-Python standard library Discord IPC client supporting Windows, Linux, and macOS."""
 
     def __init__(self, client_id: str):
         self.client_id = client_id
         self.sock: Optional[socket.socket] = None
+        self.pipe: Optional[Any] = None
         self.connected = False
+        self.is_windows = sys.platform == "win32"
 
     def connect(self) -> bool:
-        """Connect to Discord IPC socket and perform handshake."""
-        sock_path = find_discord_ipc_socket()
-        if not sock_path:
-            return False
-
+        """Connect to Discord IPC (Named Pipe on Windows, Unix Socket on Unix) and handshake."""
         try:
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self.sock.settimeout(2.0)
-            self.sock.connect(sock_path)
-            
+            if self.is_windows:
+                self.pipe = None
+                for i in range(10):
+                    pipe_path = rf"\\.\pipe\discord-ipc-{i}"
+                    try:
+                        self.pipe = open(pipe_path, "r+b", buffering=0)
+                        break
+                    except (FileNotFoundError, OSError):
+                        continue
+                if not self.pipe:
+                    return False
+            else:
+                sock_path = find_discord_ipc_socket()
+                if not sock_path:
+                    return False
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.sock.settimeout(2.0)
+                self.sock.connect(sock_path)
+
             # Send Opcode 0 (Handshake)
             payload = json.dumps({"v": 1, "client_id": self.client_id}).encode("utf-8")
             header = struct.pack("<II", OP_HANDSHAKE, len(payload))
-            self.sock.sendall(header + payload)
+            self._write_bytes(header + payload)
 
             # Read Handshake response
             op, resp = self._read_frame()
-            if op == OP_FRAME and resp.get("evt") == "READY":
+            if op == OP_FRAME and resp and resp.get("evt") == "READY":
                 self.connected = True
                 return True
             self.close()
             return False
-        except Exception as e:
+        except Exception:
             self.close()
             return False
 
-    def _read_frame(self) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
-        """Read a single length-prefixed frame from Discord."""
-        if not self.sock:
-            return None, None
-        try:
-            hdr = bytearray()
-            while len(hdr) < 8:
-                chunk = self.sock.recv(8 - len(hdr))
-                if not chunk:
-                    return None, None
-                hdr.extend(chunk)
-            op, length = struct.unpack("<II", hdr)
-            buf = bytearray()
-            while len(buf) < length:
-                chunk = self.sock.recv(min(length - len(buf), 4096))
+    def _write_bytes(self, data: bytes):
+        if self.is_windows and self.pipe:
+            self.pipe.write(data)
+        elif self.sock:
+            self.sock.sendall(data)
+
+    def _read_bytes(self, size: int) -> bytes:
+        buf = bytearray()
+        if self.is_windows and self.pipe:
+            while len(buf) < size:
+                chunk = self.pipe.read(size - len(buf))
                 if not chunk:
                     break
                 buf.extend(chunk)
+        elif self.sock:
+            while len(buf) < size:
+                chunk = self.sock.recv(size - len(buf))
+                if not chunk:
+                    break
+                buf.extend(chunk)
+        return bytes(buf)
+
+    def _read_frame(self) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+        """Read a single length-prefixed frame from Discord."""
+        try:
+            hdr = self._read_bytes(8)
+            if len(hdr) < 8:
+                return None, None
+            op, length = struct.unpack("<II", hdr)
+            buf = self._read_bytes(length)
+            if len(buf) < length:
+                return None, None
             data = json.loads(buf.decode("utf-8"))
             return op, data
         except Exception:
@@ -229,7 +275,7 @@ class DiscordIPCClient:
 
     def send_activity(self, activity: Optional[Dict[str, Any]]) -> bool:
         """Send SET_ACTIVITY command."""
-        if not self.sock or not self.connected:
+        if not self.connected or (not self.sock and not self.pipe):
             return False
         try:
             frame = {
@@ -242,8 +288,8 @@ class DiscordIPCClient:
             }
             payload = json.dumps(frame).encode("utf-8")
             header = struct.pack("<II", OP_FRAME, len(payload))
-            self.sock.sendall(header + payload)
-            
+            self._write_bytes(header + payload)
+
             # Drain response non-blockingly
             self._read_frame()
             return True
@@ -252,8 +298,15 @@ class DiscordIPCClient:
             return False
 
     def close(self):
-        """Close socket connection cleanly."""
+        """Close socket / pipe connection cleanly."""
         self.connected = False
+        if self.pipe:
+            try:
+                self.pipe.close()
+            except Exception:
+                pass
+            finally:
+                self.pipe = None
         if self.sock:
             try:
                 self.sock.close()

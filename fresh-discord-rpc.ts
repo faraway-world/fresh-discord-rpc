@@ -36,8 +36,13 @@ function getStateFilePath(): string {
   if (xdg) {
     return editor.pathJoin(xdg, "fresh-discord-rpc.json");
   }
-  const tmp = editor.getEnv("TMPDIR") || "/tmp";
-  return editor.pathJoin(tmp, "fresh-discord-rpc.json");
+  const temp = editor.getEnv("TEMP") || editor.getEnv("TMP") || editor.getEnv("TMPDIR") || "/tmp";
+  return editor.pathJoin(temp, "fresh-discord-rpc.json");
+}
+
+function isWindows(): boolean {
+  const os = (editor.getEnv("OS") || "").toLowerCase();
+  return os.includes("windows") || Boolean(editor.getEnv("WINDIR")) || Boolean(editor.getEnv("SystemRoot"));
 }
 
 function getDaemonPath(): string {
@@ -73,7 +78,8 @@ function ensureDaemonRunning(): void {
   try {
     const daemon = getDaemonPath();
     if (editor.fileExists(daemon)) {
-      editor.spawnBackgroundProcess("python3", [daemon]);
+      const pyCmd = isWindows() ? "python" : "python3";
+      editor.spawnBackgroundProcess(pyCmd, [daemon]);
     }
   } catch (err: any) {
     editor.debug("Fresh Discord RPC: Daemon spawn notice: " + (err?.message || err));
@@ -93,7 +99,7 @@ function collectState(): Record<string, unknown> {
   const cursor = editor.getPrimaryCursor();
   const cwd = editor.getCwd() || "";
   
-  const pathParts = cwd.split("/").filter(Boolean);
+  const pathParts = cwd.split(/[\\/]/).filter(Boolean);
   const workspace = showWs ? (pathParts.length > 0 ? pathParts[pathParts.length - 1] : "Workspace") : "";
 
   let activeFile = "";
@@ -104,8 +110,8 @@ function collectState(): Record<string, unknown> {
   let modified = false;
 
   if (bufferInfo && !bufferInfo.is_terminal) {
-    const rawName = bufferInfo.name || (bufferInfo.path ? bufferInfo.path.split("/").pop() || "" : "");
-    activeFile = rawName.includes("/") ? rawName.split("/").pop() || rawName : rawName;
+    const rawName = bufferInfo.name || (bufferInfo.path ? bufferInfo.path.split(/[\\/]/).pop() || "" : "");
+    activeFile = (rawName.includes("/") || rawName.includes("\\")) ? rawName.split(/[\\/]/).pop() || rawName : rawName;
     filePath = bufferInfo.path || "";
     language = bufferInfo.language || "";
     lineCount = showCursor ? (bufferInfo.line_count ?? null) : null;
