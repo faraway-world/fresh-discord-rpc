@@ -35,7 +35,7 @@ The integration operates out of the box with zero external package installations
   ```
 - **Instant Teardown & Lifecycle Awareness**: Continuously monitors the parent editor process and socket state. Presence is cleared within 1 second of closing Fresh, with automatic daemon shutdown after 30 seconds of editor inactivity.
 - **Sandboxed Bridge Architecture**: Overcomes embedded JavaScript sandbox limitations by decoupling event telemetry from raw IPC socket communication.
-- **Adaptive Token Bucket Rate Limiting**: Implements a token bucket algorithm (5-request burst capacity with 4-second refill) in strict compliance with Discord's IPC rate limits. Active file switches dispatch near-instantly (<250ms), while cursor line updates are throttled to a smooth 2-second pacing with token reserves to prevent event starvation.
+- **Snappy Event-Driven Trailing Debounce**: Employs a 200ms trailing-edge settle timer in Fresh combined with an adaptive sliding rate limiter in the daemon (750ms cursor cooldown and instant <50ms buffer switching) matching gold-standard editor RPC implementations without Discord rate-limit exhaustion.
 - **Command Palette Control**: Provides native editor commands to inspect status and toggle Rich Presence at runtime.
 
 ---
@@ -58,14 +58,14 @@ Fresh executes plugins within an isolated **QuickJS (ES2020)** engine. Because e
 ┌────────────────────────────────────────────────────────┐
 │        $XDG_RUNTIME_DIR/fresh-discord-rpc.json         │
 └──────────────────────────┬─────────────────────────────┘
-                           │ 250ms Poll & Token Bucket Dispatch
+                           │ 50ms State Poll & Sliding Throttle
                            ▼
 ┌────────────────────────────────────────────────────────┐
 │           daemon.py (Pure Python 3 Stdlib)             │
 │                                                        │
 │  ├─ Single-instance mutual exclusion lock (flock)      │
 │  ├─ Parent process monitoring (PID / comm check)       │
-│  ├─ Token bucket rate limiter (2s cursor pacing)       │
+│  ├─ Sliding-window rate limiter (750ms cursor cooldown)│
 │  └─ Length-prefixed binary frames (Opcode 0 / Opcode 1)│
 └──────────────────────────┬─────────────────────────────┘
                            │ Unix Domain Socket / Named Pipe

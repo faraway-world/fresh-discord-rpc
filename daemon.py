@@ -372,12 +372,14 @@ class DiscordBridgeDaemon:
         self.pending_payload: Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = None
         self.activity_cleared = False
 
-        # Discord IPC Token Bucket (Capacity 5, refills 1 token every 4s)
+        # Discord IPC Token Bucket & Sliding Window
         self.bucket_capacity = 5.0
         self.tokens = 5.0
         self.last_token_refill = time.time()
-        self.refill_rate = 1.0 / 4.0
+        self.refill_rate = 1.0 / 2.0  # 1 token every 2s
         self.last_active_file: Optional[str] = None
+        self.last_state_mtime: Optional[int] = None
+        self.cached_state: Optional[Dict[str, Any]] = None
 
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -436,14 +438,23 @@ class DiscordBridgeDaemon:
             return False
 
     def read_state(self) -> Optional[Dict[str, Any]]:
-        """Read state file written by Fresh plugin."""
+        """Read state file written by Fresh plugin with mtime caching."""
         if not self.state_file.exists():
+            self.cached_state = None
+            self.last_state_mtime = None
             return None
         try:
+            mtime_ns = self.state_file.stat().st_mtime_ns
+            if self.cached_state is not None and self.last_state_mtime == mtime_ns:
+                return self.cached_state
+
             with open(self.state_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                state = json.load(f)
+                self.cached_state = state
+                self.last_state_mtime = mtime_ns
+                return state
         except (json.JSONDecodeError, IOError, OSError):
-            return None
+            return self.cached_state
 
     def build_activity(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Build Discord activity dictionary from Fresh state."""
@@ -559,9 +570,9 @@ class DiscordBridgeDaemon:
         is_major = (current_file != self.last_active_file)
 
         if is_major:
-            # Major event (file switch): Instant burst if at least 1 token is available
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
+            # Major event (file switch): Instant burst if >= 1 token or > 1s since last update
+            if self.tokens >= 1.0 or (now - self.last_update_time >= 1.0):
+                self.tokens = max(0.0, self.tokens - 1.0)
                 if self.client.send_activity(activity):
                     self.last_update_time = now
                     self.last_cursor_update_time = now
@@ -577,9 +588,9 @@ class DiscordBridgeDaemon:
                 self.pending_payload = (activity, state)
         else:
             # Minor event (cursor line change within same file):
-            # 2-second user-requested pace + reserve at least 1.5 tokens for future file switches
-            time_ok = (now - self.last_cursor_update_time >= 2.0)
-            token_ok = (self.tokens >= 1.5)
+            # Fast 750ms sliding cooldown matching cord.nvim + token reserve
+            time_ok = (now - self.last_cursor_update_time >= 0.75)
+            token_ok = (self.tokens >= 1.0)
 
             if time_ok and token_ok:
                 self.tokens -= 1.0
@@ -603,13 +614,20 @@ class DiscordBridgeDaemon:
         
         reconnect_cooldown = 0.0
         config_check_time = 0.0
+        process_check_time = 0.0
+        fresh_alive = True
         fresh_offline_time: Optional[float] = None
 
         while self.running:
             now = time.time()
 
+            # Process liveness check throttled to 250ms
+            if now - process_check_time >= 0.25:
+                fresh_alive = self.is_fresh_running()
+                process_check_time = now
+
             # If Fresh has exited, track offline duration and shut down after 30s of inactivity
-            if not self.is_fresh_running():
+            if not fresh_alive:
                 if fresh_offline_time is None:
                     fresh_offline_time = now
                 elif now - fresh_offline_time > 30.0:
@@ -641,7 +659,7 @@ class DiscordBridgeDaemon:
                 else:
                     self.update(activity, state)
 
-            time.sleep(0.25)
+            time.sleep(0.05)
 
         # Clean shutdown
         if self.client.connected:
