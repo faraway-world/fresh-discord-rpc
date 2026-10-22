@@ -372,11 +372,8 @@ class DiscordBridgeDaemon:
         self.pending_payload: Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = None
         self.activity_cleared = False
 
-        # Discord IPC Token Bucket & Sliding Window
-        self.bucket_capacity = 5.0
-        self.tokens = 5.0
-        self.last_token_refill = time.time()
-        self.refill_rate = 1.0 / 2.0  # 1 token every 2s
+        # Consistent sliding cooldown (1.5s for cursor updates, instant for file switches)
+        self.cursor_cooldown = 1.5
         self.last_active_file: Optional[str] = None
         self.last_state_mtime: Optional[int] = None
         self.cached_state: Optional[Dict[str, Any]] = None
@@ -540,14 +537,8 @@ class DiscordBridgeDaemon:
 
         return activity
 
-    def _refill_tokens(self, now: float):
-        """Refill Discord rate-limit tokens up to bucket capacity."""
-        elapsed = now - self.last_token_refill
-        self.tokens = min(self.bucket_capacity, self.tokens + elapsed * self.refill_rate)
-        self.last_token_refill = now
-
     def update(self, activity: Optional[Dict[str, Any]], state: Optional[Dict[str, Any]] = None):
-        """Update activity with token bucket burst and priority throttling."""
+        """Update activity with rock-solid consistency: instant file switches, paced cursors."""
         now = time.time()
 
         if activity is None:
@@ -564,36 +555,27 @@ class DiscordBridgeDaemon:
             self.pending_payload = None
             return
 
-        self._refill_tokens(now)
-
         current_file = state.get("active_file") if state else None
         is_major = (current_file != self.last_active_file)
 
         if is_major:
-            # Major event (file switch): Instant burst if >= 1 token or > 1s since last update
-            if self.tokens >= 1.0 or (now - self.last_update_time >= 1.0):
-                self.tokens = max(0.0, self.tokens - 1.0)
-                if self.client.send_activity(activity):
-                    self.last_update_time = now
-                    self.last_cursor_update_time = now
-                    self.last_payload = activity
-                    self.last_active_file = current_file
-                    self.pending_payload = None
-                    self.activity_cleared = False
-                    log(f"Updated (file switch): {activity.get('details')} | {activity.get('state')}")
-                else:
-                    log("Failed to send activity. Will reconnect...")
-                    self.client.close()
+            # Major event (file switch): Send immediately, zero delay!
+            if self.client.send_activity(activity):
+                self.last_update_time = now
+                self.last_cursor_update_time = now
+                self.last_payload = activity
+                self.last_active_file = current_file
+                self.pending_payload = None
+                self.activity_cleared = False
+                log(f"Updated (file switch): {activity.get('details')} | {activity.get('state')}")
             else:
-                self.pending_payload = (activity, state)
+                log("Failed to send activity. Will reconnect...")
+                self.client.close()
         else:
             # Minor event (cursor line change within same file):
-            # Fast 750ms sliding cooldown matching cord.nvim + token reserve
-            time_ok = (now - self.last_cursor_update_time >= 0.75)
-            token_ok = (self.tokens >= 1.0)
-
-            if time_ok and token_ok:
-                self.tokens -= 1.0
+            elapsed = now - self.last_cursor_update_time
+            if elapsed >= self.cursor_cooldown:
+                # Cooldown passed: send immediately
                 if self.client.send_activity(activity):
                     self.last_update_time = now
                     self.last_cursor_update_time = now
@@ -605,7 +587,8 @@ class DiscordBridgeDaemon:
                     log("Failed to send activity. Will reconnect...")
                     self.client.close()
             else:
-                self.pending_payload = (activity, state)
+                # Cooldown active: buffer latest activity to flush when cooldown elapses
+                self.pending_payload = activity
 
     def run(self):
         """Main loop."""
@@ -658,6 +641,20 @@ class DiscordBridgeDaemon:
                     self.update(None)
                 else:
                     self.update(activity, state)
+
+                # Process pending deferred update the moment cooldown elapses
+                if self.pending_payload and (now - self.last_cursor_update_time >= self.cursor_cooldown):
+                    pending = self.pending_payload
+                    self.pending_payload = None
+                    if pending != self.last_payload:
+                        if self.client.send_activity(pending):
+                            self.last_update_time = now
+                            self.last_cursor_update_time = now
+                            self.last_payload = pending
+                            self.activity_cleared = False
+                            log(f"Updated (cursor flush): {pending.get('details')} | {pending.get('state')}")
+                        else:
+                            self.client.close()
 
             time.sleep(0.05)
 

@@ -190,48 +190,31 @@ function onEditorChange(): void {
 }
 registerHandler("discord_rpc_on_change", onEditorChange);
 
-let cursorTimerId: number | null = null;
-let lastCursorMoveTime = 0;
-
-function onCursorSettle(): void {
-  cursorTimerId = null;
-  lastCursorMoveTime = 0;
-  flushState(false);
-}
-registerHandler("discord_rpc_cursor_settle", onCursorSettle);
+let lastCursorFlush = 0;
+let cursorPending = false;
 
 function onCursorMove(): void {
   isDirty = true;
   const now = Date.now();
-  if (!lastCursorMoveTime) {
-    lastCursorMoveTime = now;
-  }
-
-  if (cursorTimerId !== null) {
-    try {
-      editor.clearInterval(cursorTimerId);
-    } catch (_) {}
-    cursorTimerId = null;
-  }
-
-  // If user navigates continuously for > 1.5s, trigger flush
-  if (now - lastCursorMoveTime >= 1500) {
-    lastCursorMoveTime = now;
+  // Throttle disk writes to at most twice a second during navigation
+  if (now - lastCursorFlush >= 500) {
+    lastCursorFlush = now;
+    cursorPending = false;
     flushState(false);
   } else {
-    try {
-      cursorTimerId = editor.setTimeout(200, "discord_rpc_cursor_settle");
-    } catch (_) {
-      // Fallback
-      flushState(false);
-    }
+    cursorPending = true;
   }
 }
 registerHandler("discord_rpc_on_cursor", onCursorMove);
 
 function onHeartbeat(): void {
-  // Periodic background heartbeat to ensure daemon tracks active session
-  flushState(false);
+  const now = Date.now();
+  // Ensure pending cursor changes flush promptly within 1s
+  if (cursorPending || (now - lastCursorFlush >= 1500)) {
+    cursorPending = false;
+    lastCursorFlush = now;
+    flushState(false);
+  }
 }
 registerHandler("discord_rpc_heartbeat", onHeartbeat);
 
@@ -278,8 +261,8 @@ editor.on("cursor_moved", "discord_rpc_on_cursor");
 editor.registerCommand("Discord RPC: Toggle", "Toggle Discord Rich Presence", "discord_rpc_toggle", null);
 editor.registerCommand("Discord RPC: Status", "Show Discord Rich Presence status", "discord_rpc_status", null);
 
-// Start periodic heartbeat (every 3 seconds)
-editor.setInterval(3000, "discord_rpc_heartbeat");
+// Periodic background heartbeat (checks pending cursor writes every 1 second)
+editor.setInterval(1000, "discord_rpc_heartbeat");
 
 // Ensure daemon is active & perform initial flush
 ensureDaemonRunning();
