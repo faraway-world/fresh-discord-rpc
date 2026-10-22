@@ -367,9 +367,17 @@ class DiscordBridgeDaemon:
         self.client = DiscordIPCClient(self.client_id)
         self.running = True
         self.last_update_time = 0.0
+        self.last_cursor_update_time = 0.0
         self.last_payload: Optional[Dict[str, Any]] = None
-        self.pending_payload: Optional[Dict[str, Any]] = None
+        self.pending_payload: Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = None
         self.activity_cleared = False
+
+        # Discord IPC Token Bucket (Capacity 5, refills 1 token every 4s)
+        self.bucket_capacity = 5.0
+        self.tokens = 5.0
+        self.last_token_refill = time.time()
+        self.refill_rate = 1.0 / 4.0
+        self.last_active_file: Optional[str] = None
 
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -521,8 +529,14 @@ class DiscordBridgeDaemon:
 
         return activity
 
-    def update(self, activity: Optional[Dict[str, Any]]):
-        """Update activity with rate-limiting."""
+    def _refill_tokens(self, now: float):
+        """Refill Discord rate-limit tokens up to bucket capacity."""
+        elapsed = now - self.last_token_refill
+        self.tokens = min(self.bucket_capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_token_refill = now
+
+    def update(self, activity: Optional[Dict[str, Any]], state: Optional[Dict[str, Any]] = None):
+        """Update activity with token bucket burst and priority throttling."""
         now = time.time()
 
         if activity is None:
@@ -531,6 +545,7 @@ class DiscordBridgeDaemon:
                 self.activity_cleared = True
                 self.last_payload = None
                 self.pending_payload = None
+                self.last_active_file = None
                 log("Activity cleared.")
             return
 
@@ -538,21 +553,48 @@ class DiscordBridgeDaemon:
             self.pending_payload = None
             return
 
-        # Discord rate-limit: 15 seconds
-        elapsed = now - self.last_update_time
-        if elapsed < 15.0 and self.last_payload is not None:
-            self.pending_payload = activity
-            return
+        self._refill_tokens(now)
 
-        if self.client.send_activity(activity):
-            self.last_update_time = now
-            self.last_payload = activity
-            self.pending_payload = None
-            self.activity_cleared = False
-            log(f"Updated: {activity.get('details')} | {activity.get('state')}")
+        current_file = state.get("active_file") if state else None
+        is_major = (current_file != self.last_active_file)
+
+        if is_major:
+            # Major event (file switch): Instant burst if at least 1 token is available
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                if self.client.send_activity(activity):
+                    self.last_update_time = now
+                    self.last_cursor_update_time = now
+                    self.last_payload = activity
+                    self.last_active_file = current_file
+                    self.pending_payload = None
+                    self.activity_cleared = False
+                    log(f"Updated (file switch): {activity.get('details')} | {activity.get('state')}")
+                else:
+                    log("Failed to send activity. Will reconnect...")
+                    self.client.close()
+            else:
+                self.pending_payload = (activity, state)
         else:
-            log("Failed to send activity. Will reconnect...")
-            self.client.close()
+            # Minor event (cursor line change within same file):
+            # 2-second user-requested pace + reserve at least 1.5 tokens for future file switches
+            time_ok = (now - self.last_cursor_update_time >= 2.0)
+            token_ok = (self.tokens >= 1.5)
+
+            if time_ok and token_ok:
+                self.tokens -= 1.0
+                if self.client.send_activity(activity):
+                    self.last_update_time = now
+                    self.last_cursor_update_time = now
+                    self.last_payload = activity
+                    self.pending_payload = None
+                    self.activity_cleared = False
+                    log(f"Updated (cursor): {activity.get('details')} | {activity.get('state')}")
+                else:
+                    log("Failed to send activity. Will reconnect...")
+                    self.client.close()
+            else:
+                self.pending_payload = (activity, state)
 
     def run(self):
         """Main loop."""
@@ -593,16 +635,13 @@ class DiscordBridgeDaemon:
                 activity = self.build_activity(state) if state else None
 
                 if activity is None:
-                    # RPC disabled or stale: clear any pending update and send None
+                    # RPC disabled or stale: clear presence immediately
                     self.pending_payload = None
                     self.update(None)
-                elif self.pending_payload and (now - self.last_update_time >= 15.0):
-                    # Rate-limit window passed: send the latest activity
-                    self.update(activity)
                 else:
-                    self.update(activity)
+                    self.update(activity, state)
 
-            time.sleep(1.0)
+            time.sleep(0.25)
 
         # Clean shutdown
         if self.client.connected:

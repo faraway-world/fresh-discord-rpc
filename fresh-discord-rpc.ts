@@ -172,7 +172,7 @@ function flushState(force = false): void {
     const compareObj = { ...state, updated_at: 0 };
     const compareStr = JSON.stringify(compareObj);
     
-    if (force || compareStr !== lastSerialized || isDirty || (now - lastFlushTime >= 5)) {
+    if (force || compareStr !== lastSerialized || isDirty || (now - lastFlushTime >= 2)) {
       lastSerialized = compareStr;
       lastFlushTime = now;
       isDirty = false;
@@ -244,8 +244,8 @@ editor.on("cursor_moved", "discord_rpc_on_cursor");
 editor.registerCommand("Discord RPC: Toggle", "Toggle Discord Rich Presence", "discord_rpc_toggle", null);
 editor.registerCommand("Discord RPC: Status", "Show Discord Rich Presence status", "discord_rpc_status", null);
 
-// Start periodic heartbeat (every 3 seconds)
-editor.setInterval(3000, "discord_rpc_heartbeat");
+// Start periodic heartbeat (every 2 seconds for responsive cursor line updates)
+editor.setInterval(2000, "discord_rpc_heartbeat");
 
 // Ensure daemon is active & perform initial flush
 ensureDaemonRunning();
