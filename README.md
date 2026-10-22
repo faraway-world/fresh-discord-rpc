@@ -9,15 +9,18 @@
 [![Runtime](https://img.shields.io/badge/Runtime-Python%203.8%2B%20(Stdlib%20Only)-yellow.svg)]()
 [![Editor](https://img.shields.io/badge/Editor-Fresh%20%E2%89%A50.4.0-brightgreen.svg)](https://github.com/sinelaw/fresh)
 
-</div>
-
 ---
 
 ## Overview
 
 `fresh-discord-rpc` is an automated, zero-dependency Rich Presence integration designed for the [Fresh](https://github.com/sinelaw/fresh) terminal text editor. It provides real-time workspace and buffer activity directly to Discord, while respecting system resource constraints and Discord rate limits.
 
+<p align="center">
+  <img width="537" height="222" alt="image" src="https://github.com/user-attachments/assets/a169cdaa-e7d9-4680-8326-9d4ced20eaa1" />
+</p>
+
 The integration operates out of the box with zero external package installations (`pip`, virtual environments, or system services are not required) and cleans up its presence instantaneously upon editor termination.
+</div>
 
 ---
 
