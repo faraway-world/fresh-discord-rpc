@@ -372,8 +372,8 @@ class DiscordBridgeDaemon:
         self.pending_payload: Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = None
         self.activity_cleared = False
 
-        # Consistent sliding cooldown (1.5s for cursor updates, instant for file switches)
-        self.cursor_cooldown = 1.5
+        # Consistent sliding cooldown (1.0s for cursor updates, instant for file switches)
+        self.cursor_cooldown = 1.0
         self.last_active_file: Optional[str] = None
         self.last_state_mtime: Optional[int] = None
         self.cached_state: Optional[Dict[str, Any]] = None

@@ -35,7 +35,7 @@ The integration operates out of the box with zero external package installations
   ```
 - **Instant Teardown & Lifecycle Awareness**: Continuously monitors the parent editor process and socket state. Presence is cleared within 1 second of closing Fresh, with automatic daemon shutdown after 30 seconds of editor inactivity.
 - **Sandboxed Bridge Architecture**: Overcomes embedded JavaScript sandbox limitations by decoupling event telemetry from raw IPC socket communication.
-- **Deterministic Event-Driven Pipeline**: Decouples immediate file/buffer switching (<50ms) from cursor movements, buffered through a predictable 1.5-second trailing sliding window. Guarantees consistent, rock-solid presence updates without token starvation or rate-limit lockouts.
+- **Deterministic Event-Driven Pipeline**: Decouples immediate file/buffer switching (<50ms) from cursor and scroll movements, buffered through a predictable 1.0-second sliding window. Guarantees consistent, rock-solid presence updates without token starvation or rate-limit lockouts.
 - **Command Palette Control**: Provides native editor commands to inspect status and toggle Rich Presence at runtime.
 
 ---
@@ -65,7 +65,7 @@ Fresh executes plugins within an isolated **QuickJS (ES2020)** engine. Because e
 │                                                        │
 │  ├─ Single-instance mutual exclusion lock (flock)      │
 │  ├─ Parent process monitoring (PID / comm check)       │
-│  ├─ Sliding-window rate limiter (1.5s cursor cooldown)│
+│  ├─ Sliding-window rate limiter (1.0s cursor cooldown)│
 │  └─ Length-prefixed binary frames (Opcode 0 / Opcode 1)│
 └──────────────────────────┬─────────────────────────────┘
                            │ Unix Domain Socket / Named Pipe

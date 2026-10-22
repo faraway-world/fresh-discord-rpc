@@ -116,8 +116,18 @@ function collectState(): Record<string, unknown> {
     language = bufferInfo.language || "";
     lineCount = showCursor ? (bufferInfo.line_count ?? null) : null;
     modified = bufferInfo.modified;
-    if (showCursor && cursor && cursor.line !== null && cursor.line !== undefined) {
-      cursorLine = cursor.line + 1; // 1-indexed for display
+    if (showCursor) {
+      let rawLine: number | null = null;
+      if (cursor && cursor.line !== null && cursor.line !== undefined) {
+        rawLine = cursor.line;
+      } else if (typeof editor.getCursorLine === "function") {
+        try {
+          rawLine = editor.getCursorLine();
+        } catch (_) {}
+      }
+      if (rawLine !== null && rawLine !== undefined && rawLine >= 0) {
+        cursorLine = rawLine + 1; // 1-indexed for display
+      }
     }
   }
 
@@ -256,6 +266,9 @@ editor.on("after_file_save", "discord_rpc_on_change");
 editor.on("after_file_revert", "discord_rpc_on_change");
 editor.on("language_changed", "discord_rpc_on_change");
 editor.on("cursor_moved", "discord_rpc_on_cursor");
+editor.on("viewport_changed", "discord_rpc_on_cursor");
+editor.on("mouse_scroll", "discord_rpc_on_cursor");
+editor.on("mouse_click", "discord_rpc_on_cursor");
 
 // Register commands
 editor.registerCommand("Discord RPC: Toggle", "Toggle Discord Rich Presence", "discord_rpc_toggle", null);
