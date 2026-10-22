@@ -106,7 +106,10 @@ def log(msg: str):
     """Write timestamped log message to stdout and log file."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [Fresh Discord RPC] {msg}"
-    print(formatted, flush=True)
+    try:
+        print(formatted, flush=True)
+    except Exception:
+        pass
     try:
         with open(get_log_file_path(), "a", encoding="utf-8") as f:
             f.write(formatted + "\n")
@@ -130,6 +133,44 @@ def load_user_config() -> Dict[str, Any]:
             except Exception:
                 pass
     return {}
+
+def daemonize() -> Optional[int]:
+    """
+    Detach daemon from the Fresh process group on Unix.
+    Prevents Fresh from killing the daemon before it can send
+    an instant SET_ACTIVITY None clearance frame to Discord.
+    """
+    if os.environ.get("FRESH_RPC_DETACHED") == "1":
+        return None
+    if sys.platform != "win32":
+        parent_pid = os.getppid()
+        try:
+            pid = os.fork()
+            if pid > 0:
+                # Immediate child spawned by Fresh exits cleanly
+                sys.exit(0)
+            os.setsid()
+            os.environ["FRESH_RPC_DETACHED"] = "1"
+
+            # Ignore SIGPIPE when parent closes pipes
+            if hasattr(signal, "SIGPIPE"):
+                signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+            # Redirect standard streams to /dev/null
+            try:
+                devnull = os.open(os.devnull, os.O_RDWR)
+                os.dup2(devnull, 0)
+                os.dup2(devnull, 1)
+                os.dup2(devnull, 2)
+                os.close(devnull)
+            except Exception:
+                pass
+
+            return parent_pid
+        except Exception as e:
+            log(f"Daemonize fallback: {e}")
+            return parent_pid
+    return None
 
 def acquire_single_instance_lock():
     """Ensure only one instance of the daemon runs across platforms."""
@@ -316,8 +357,9 @@ class DiscordIPCClient:
                 self.sock = None
 
 class DiscordBridgeDaemon:
-    def __init__(self, state_file: Path):
+    def __init__(self, state_file: Path, fresh_parent_pid: Optional[int] = None):
         self.state_file = state_file
+        self.fresh_parent_pid = fresh_parent_pid
         self.config = load_user_config()
         self.client_id = os.environ.get("FRESH_DISCORD_CLIENT_ID") or self.config.get("client_id") or DEFAULT_CLIENT_ID
         self.activity_prefix = self.config.get("activity_prefix", "Editing")
@@ -331,10 +373,19 @@ class DiscordBridgeDaemon:
 
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
         log(f"Received signal {signum}, stopping daemon...")
         self.running = False
+        try:
+            if self.client.connected:
+                self.client.send_activity(None)
+                self.client.close()
+        except Exception:
+            pass
+        sys.exit(0)
 
     def reload_config(self):
         """Periodically reload config to detect Client ID or setting changes."""
@@ -351,10 +402,9 @@ class DiscordBridgeDaemon:
     def is_fresh_running(self) -> bool:
         """Check if any fresh process is running."""
         try:
-            ppid = os.getppid()
-            if ppid > 1:
+            if self.fresh_parent_pid and self.fresh_parent_pid > 1:
                 try:
-                    comm_file = Path(f"/proc/{ppid}/comm")
+                    comm_file = Path(f"/proc/{self.fresh_parent_pid}/comm")
                     if comm_file.exists() and "fresh" in comm_file.read_text().strip().lower():
                         return True
                 except Exception:
@@ -398,8 +448,8 @@ class DiscordBridgeDaemon:
         updated_at = state.get("updated_at", 0)
         now = time.time()
         
-        # Consider stale if state was not updated in 300 seconds
-        if now - updated_at > 300.0:
+        # Consider stale if state was not updated in 20 seconds
+        if now - updated_at > 20.0:
             return None
 
         active_file = state.get("active_file", "")
@@ -561,9 +611,10 @@ class DiscordBridgeDaemon:
         log("Micro-daemon stopped cleanly.")
 
 def main():
+    parent_pid = daemonize()
     _lock = acquire_single_instance_lock()
     state_file = get_state_file_path()
-    daemon = DiscordBridgeDaemon(state_file)
+    daemon = DiscordBridgeDaemon(state_file, fresh_parent_pid=parent_pid)
     daemon.run()
 
 if __name__ == "__main__":
